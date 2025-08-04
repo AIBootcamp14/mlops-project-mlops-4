@@ -1,0 +1,150 @@
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import wandb
+import fire
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from icecream import ic
+
+from src.dataset.watch_log import get_datasets
+from src.dataset.data_loader import data_loader
+from src.model.movie_predictor import movie_predictor, model_save
+from src.utils.utils import init_seed
+from src.utils.enums import model_types
+from src.train.train import train
+from src.evaluate.evaluate import evaluate
+
+load_dotenv()
+init_seed()
+
+# Model implementation part
+# In this project, the quality of the model is not important
+# So, you can ignore this part
+
+# Load data
+df = pd.read_csv("./dataset/watch_log.csv")
+target_columns = ["rating", "popularity", "watch_seconds"]
+df = df[target_columns].drop_duplicates()
+data = df.values
+
+# Divide data
+np.random.shuffle(data)
+split = int(len(data) * .8)
+train_data = data[:split]
+val_data = data[split:]
+
+def run_train(model_name, num_epochs = 10):
+    model_types.validation(model_name)
+
+    # Create dataset and data loader
+    train_dataset, val_dataset, test_dataset = get_datasets()
+    train_loader = data_loader(train_dataset.features, train_dataset.labels, batch_size = 8, shuffle = True)
+    val_loader = data_loader(val_dataset.features, val_dataset.labels, batch_size = 64, shuffle = False)
+    test_loader = data_loader(test_dataset.features, test_dataset.labels, batch_size = 64, shuffle = False)
+
+    # Init model
+    model_params = {
+                "input_dim": train_dataset.features_dim,
+                "num_classes": train_dataset.num_classes,
+                "hidden_dim": 64
+    }
+    # model = MoviePredictor(**model_params)
+
+    model_class = model_types[model_name.upper()].value  # MOVIE_PREDICTOR = movie_predictor
+    model = model_class(**model_params)
+
+    # Train loop
+    for epoch in range(num_epochs):
+    train_loss = train(model, train_loader)
+    val_loss, _ = evaluate(model, val_loader)
+    print(f"Epoch {epoch + 1}/{num_epochs}, "
+        f"Train Loss: {train_loss:.4f}, "
+        f"Val Loss: {val_loss:.4f}, "
+        f"Val-Train Loss : {val_loss-train_loss:.4f}")
+
+    # Test
+    test_loss, predictions = evaluate(model, test_loader)
+    #print(f"Test Loss : {test_loss:.4f}")
+    ic(test_loss)
+    #ic(predictions)
+    #ic([train_dataset.decode_content_id(idx) for idx in predictions])
+
+    # Model save
+    model_save(
+            model = model,
+            model_params = model_params,
+            epoch = num_epochs,
+            loss = train_loss,
+            scaler = train_dataset.scaler,
+            label_encoder = train_dataset.label_encoder,
+    )
+
+# Neural network model definition
+class SimpleNN:
+    def __init__(self, input_dim: int, hidden_dim: int) -> None:
+        self.weights1 = np.random.randn(input_dim, hidden_dim) * 0.01
+        self.bias1 = np.zeros((1, hidden_dim))
+        self.weights2 = np.random.randn(hidden_dim, 1) * 0.01
+        self.bias2 = np.zeros((1, 1))
+    
+    def relu(self, x):
+        return np.maximum(0, x)
+
+    def forward(self, x):
+        self.z1 = np.dot(x, self.weights1) + self.bias1
+        self.a1 = self.relu(self.z1)
+        self.z2 = np.dot(self.a1, self.weights2) + self.bias2
+        return self.z2
+
+    def backward(self, x, y, output, lr = .001):
+        m = y.shape[0]
+        dz2 = (output - y) / m
+        dw2 = np.dot(self.a1.T, dz2)
+        db2 = np.sum(dz2, axis = 0, keepdims = True)
+        da1 = np.dot(dz2, self.weights2.T)
+        dz1 = da1 * (self.z1 > 0)
+        dw1 = np.dot(x.T, dz1)
+        db1 = np.sum(dz1, axis = 0, keepdims = True)
+        self.weights2 -= lr * dw2
+        self.bias2 -= lr * db2
+        self.weights1 -= lr * dw1
+        self.bias1 -= lr * db1
+
+# Data preperation
+X_train = train_data[:, :2]
+y_train = train_data[:, 2].reshape(-1, 1)
+X_val = val_data[:, :2]
+y_val = val_data[:, 2].reshape(-1, 1)
+
+# Model Initialization
+model = SimpleNN(input_dim = 2, hidden_dim = 64)
+
+# Train loop
+epochs = 15
+
+for epoch in range(epochs):
+    output = model.forward(X_train)
+    train_loss = np.mean((output - y_train) ** 2)
+    model.backward(X_train, y_train, output)
+    val_output = model.forward(X_val)
+    val_loss = np.mean((val_output - y_val) ** 2)
+    print(f"Epoch {epoch + 1}/{epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+
+
+#def run_popular_movie_crawler():
+#    tmdb_crawler = TMDB_crawler()
+#    result = tmdb_crawler.get_popular_movie_pages(start_page = 1, end_page = 1)
+#    tmdb_crawler.save_movies_to_json_file(result, dst = "./result", filename = "popular")
+#
+#    tmdb_preprocessor = TMDB_preprocessor(result)
+#    tmdb_preprocessor.run()
+#    tmdb_preprocessor.save("watch_log")
+
+if __name__ == "__main__":
+    fire.Fire({
+        "train": run_train, 
+    })
