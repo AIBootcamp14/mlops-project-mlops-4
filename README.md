@@ -35,11 +35,11 @@
 ### **3.1 시스템 구조도**
 DB:
 MySQL
-
+↓
 Backend:
 FastAPI
 Port8001
-
+↕
 Frontend:
 React.js
 Port8080
